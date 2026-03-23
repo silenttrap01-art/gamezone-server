@@ -144,10 +144,12 @@ async def ws_endpoint(ws: WebSocket, game_id: str, user_id: str, username: str):
         while True:
             data = await ws.receive_text()
             await handle_ws(game_id, user_id, username, json.loads(data))
-    except WebSocketDisconnect:
+   except WebSocketDisconnect:
         connections.get(game_id, {}).pop(user_id, None)
-        if game_id in games and games[game_id]["status"] == "playing":
+        game = games.get(game_id)
+        if game and game["status"] == "playing":
             await broadcast(game_id, {"type": "opponent_left", "message": f"{username} покинул игру"})
+        # НЕ удаляем игру — оставляем для реванша
 
 def make_game(gtype, gid, uid, uname):
     base = {"id":gid,"type":gtype,"player1":{"id":uid,"name":uname},"player2":None,"status":"waiting","chat":[]}
