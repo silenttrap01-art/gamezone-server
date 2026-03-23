@@ -412,7 +412,7 @@ async def api_challenge(data: dict):
         return {"ok":False,"error":"missing fields"}
 
     import uuid as _uuid
-    game_id = gtype + "_" + _uuid.uuid4().hex[:8]
+    game_id = data.get("game_id") or gtype + "_" + _uuid.uuid4().hex[:8]
     cid = _uuid.uuid4().hex[:8]
     save_challenge(cid, from_id, to_id, gtype, game_id)
 
