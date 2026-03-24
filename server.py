@@ -53,6 +53,16 @@ def init_db():
     except: pass
     try: c.execute("ALTER TABLE users ADD COLUMN registered INTEGER DEFAULT 0")
     except: pass
+    try: c.execute("ALTER TABLE users ADD COLUMN wins_ttt INTEGER DEFAULT 0")
+    except: pass
+    try: c.execute("ALTER TABLE users ADD COLUMN wins_rps INTEGER DEFAULT 0")
+    except: pass
+    try: c.execute("ALTER TABLE users ADD COLUMN wins_checkers INTEGER DEFAULT 0")
+    except: pass
+    try: c.execute("ALTER TABLE users ADD COLUMN wins_dice INTEGER DEFAULT 0")
+    except: pass
+    try: c.execute("ALTER TABLE users ADD COLUMN losses INTEGER DEFAULT 0")
+    except: pass
     c.commit(); c.close()
 
 init_db()
@@ -77,9 +87,9 @@ def get_user(uid):
 def get_registered_users():
     """Только пользователи с никнеймом (зарегистрированные в апке)"""
     c = get_db()
-    rows = c.execute("SELECT user_id,first_name,username,nickname,games_won,games_played FROM users WHERE registered=1 AND nickname!=''").fetchall()
+    rows = c.execute("SELECT user_id,first_name,username,nickname,games_won,games_played,wins_ttt,wins_rps,wins_checkers,wins_dice,losses FROM users WHERE registered=1 AND nickname!=''").fetchall()
     c.close()
-    return [{"id":r[0],"name":r[1],"username":r[2],"nickname":r[3],"wins":r[4],"games":r[5]} for r in rows]
+    return [{"id":r[0],"name":r[1],"username":r[2],"nickname":r[3],"wins":r[4],"games":r[5],"wins_ttt":r[6],"wins_rps":r[7],"wins_checkers":r[8],"wins_dice":r[9],"losses":r[10]} for r in rows]
 
 def set_nickname(uid, nickname):
     c = get_db()
@@ -165,14 +175,18 @@ def mark_read(uid):
     c.execute("UPDATE notifications SET read=1 WHERE user_id=?", (uid,))
     c.commit(); c.close()
 
-def record_win(uid):
+def record_win(uid, gtype=""):
     c = get_db()
-    c.execute("UPDATE users SET games_played=games_played+1,games_won=games_won+1 WHERE user_id=?", (uid,))
+    col = {"ttt":"wins_ttt","rps":"wins_rps","checkers":"wins_checkers","dice":"wins_dice"}.get(gtype,"")
+    if col:
+        c.execute(f"UPDATE users SET games_played=games_played+1,games_won=games_won+1,{col}={col}+1 WHERE user_id=?", (uid,))
+    else:
+        c.execute("UPDATE users SET games_played=games_played+1,games_won=games_won+1 WHERE user_id=?", (uid,))
     c.commit(); c.close()
 
 def record_game(uid):
     c = get_db()
-    c.execute("UPDATE users SET games_played=games_played+1 WHERE user_id=?", (uid,))
+    c.execute("UPDATE users SET games_played=games_played+1,losses=losses+1 WHERE user_id=?", (uid,))
     c.commit(); c.close()
 
 # ── ХРАНИЛИЩЕ ────────────────────────────────────────────────
@@ -323,7 +337,7 @@ async def handle_msg(game_id, user_id, username, msg):
             game["result"]={"c1":c1,"c2":c2,"winner":wid}
             game["status"]="finished"; game["winner"]=wid
             if wid!="draw":
-                try: record_win(int(wid))
+                try: record_win(int(wid), game["type"])
                 except: pass
                 try: record_game(int(p2 if wid==p1 else p1))
                 except: pass
@@ -409,7 +423,7 @@ async def finish_dice(game_id,game):
         else: game["winner"]="draw"
         game["status"]="finished"
         if game["winner"]!="draw" and game["winner"]:
-            try: record_win(int(game["winner"]))
+            try: record_win(int(game["winner"]), game["type"])
             except: pass
             opp=p2 if game["winner"]==p1 else p1
             if opp:
@@ -508,13 +522,13 @@ def chk_win(game):
         game["status"]="finished"
         game["winner"]=game["player2"]["id"] if game["player2"] else "white"
         if game["player2"]:
-            try: record_win(int(game["player2"]["id"]))
+            try: record_win(int(game["player2"]["id"]), game["type"])
             except: pass
             try: record_game(int(game["player1"]["id"]))
             except: pass
     elif w==0:
         game["status"]="finished"; game["winner"]=game["player1"]["id"]
-        try: record_win(int(game["player1"]["id"]))
+        try: record_win(int(game["player1"]["id"]), game["type"])
         except: pass
         if game["player2"]:
             try: record_game(int(game["player2"]["id"]))
