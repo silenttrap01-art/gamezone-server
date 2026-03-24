@@ -1,8 +1,7 @@
 """
-GameZone — FastAPI + Telegram Bot
-Реванш работает внутри Mini App через WebSocket без бота.
+GameZone — единый сервер: FastAPI (WebSocket) + Telegram бот
+Реванш внутри Mini App без бота.
 """
-
 import os, json, random, sqlite3, threading
 import uuid as _uuid
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -17,12 +16,11 @@ bot = telebot.TeleBot(BOT_TOKEN)
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# ── БД ────────────────────────────────────────────────────────
+# ── БД ───────────────────────────────────────────────────────
 DB = "gamezone.db"
 
 def get_db():
-    c = sqlite3.connect(DB, check_same_thread=False)
-    return c
+    return sqlite3.connect(DB, check_same_thread=False)
 
 def init_db():
     c = get_db()
@@ -71,11 +69,10 @@ def record_game(uid):
     c.execute("UPDATE users SET games_played=games_played+1 WHERE user_id=?", (uid,))
     c.commit(); c.close()
 
-# ── ХРАНИЛИЩЕ ─────────────────────────────────────────────────
-games = {}        # game_id → game state
-connections = {}  # game_id → {user_id: websocket}
-# Для реванша: отслеживаем кто хочет реванш
-rematch_requests = {}  # game_id → set of user_ids
+# ── ХРАНИЛИЩЕ ────────────────────────────────────────────────
+games = {}
+connections = {}
+rematch_requests = {}
 
 async def broadcast(game_id, msg):
     if game_id not in connections: return
@@ -123,12 +120,12 @@ async def ws_endpoint(ws: WebSocket, game_id: str, user_id: str, username: str):
 
 def make_game(gtype, gid, uid, uname):
     base = {"id":gid,"type":gtype,"player1":{"id":uid,"name":uname},"player2":None,"status":"waiting","chat":[]}
-    if gtype=="ttt":
+    if gtype == "ttt":
         base.update({"board":[" "]*9,"current":uid,"winner":None})
-    elif gtype=="rps":
+    elif gtype == "rps":
         base.update({"choices":{},"ready":{},"result":None})
-    elif gtype=="checkers":
-        board=[None]*64
+    elif gtype == "checkers":
+        board = [None]*64
         for row in range(3):
             for col in range(8):
                 if (row+col)%2==1: board[row*8+col]={"color":"white","king":False}
@@ -136,7 +133,7 @@ def make_game(gtype, gid, uid, uname):
             for col in range(8):
                 if (row+col)%2==1: board[row*8+col]={"color":"red","king":False}
         base.update({"board":board,"current_color":"red","selected":None,"chain_piece":None,"winner":None})
-    elif gtype=="dice":
+    elif gtype == "dice":
         base.update({"round":1,"scores":{"p1":0,"p2":0},"guesser_role":"p1",
                      "secret":None,"attempts_left":3,"round_log":[],"phase":"guessing","winner":None})
     return base
@@ -248,61 +245,34 @@ async def handle_msg(game_id, user_id, username, msg):
             except: pass
         await broadcast(game_id,{"type":"game_state","game":game})
 
-    # ── РЕВАНШ ВНУТРИ АПКИ ────────────────────────────────────
     elif t == "rematch_request":
-        # Игрок хочет реванш — сообщаем сопернику
-        game = games.get(game_id)
-        if not game or game["status"] != "finished": return
-        rematch_requests.setdefault(game_id, set()).add(user_id)
-        # Сообщаем сопернику что этот игрок хочет реванш
-        await broadcast(game_id, {
-            "type": "rematch_requested",
-            "from_id": user_id,
-            "from_name": username
-        })
-        # Если оба хотят реванш — создаём новую игру
-        reqs = rematch_requests.get(game_id, set())
-        p1id = game["player1"]["id"]
-        p2id = game["player2"]["id"] if game["player2"] else None
+        if not game or game["status"]!="finished": return
+        rematch_requests.setdefault(game_id,set()).add(user_id)
+        await broadcast(game_id,{"type":"rematch_requested","from_id":user_id,"from_name":username})
+        reqs=rematch_requests.get(game_id,set())
+        p1id=game["player1"]["id"]; p2id=game["player2"]["id"] if game["player2"] else None
         if p1id in reqs and p2id in reqs:
-            await start_rematch(game_id, game)
+            await start_rematch(game_id,game)
 
     elif t == "rematch_accept":
-        # Принять реванш = тоже хочу реванш
-        game = games.get(game_id)
-        if not game or game["status"] != "finished": return
-        rematch_requests.setdefault(game_id, set()).add(user_id)
-        reqs = rematch_requests.get(game_id, set())
-        p1id = game["player1"]["id"]
-        p2id = game["player2"]["id"] if game["player2"] else None
+        if not game or game["status"]!="finished": return
+        rematch_requests.setdefault(game_id,set()).add(user_id)
+        reqs=rematch_requests.get(game_id,set())
+        p1id=game["player1"]["id"]; p2id=game["player2"]["id"] if game["player2"] else None
         if p1id in reqs and p2id in reqs:
-            await start_rematch(game_id, game)
+            await start_rematch(game_id,game)
         else:
-            await broadcast(game_id, {
-                "type": "rematch_requested",
-                "from_id": user_id,
-                "from_name": username
-            })
+            await broadcast(game_id,{"type":"rematch_requested","from_id":user_id,"from_name":username})
 
-async def start_rematch(old_game_id, old_game):
-    """Сбрасываем игру до начального состояния — оба игрока остаются подключены."""
-    gtype = old_game["type"]
-    p1 = old_game["player1"]
-    p2 = old_game["player2"]
+async def start_rematch(old_id, old_game):
+    gtype=old_game["type"]; p1=old_game["player1"]; p2=old_game["player2"]
+    new_state=make_game(gtype,old_id,p1["id"],p1["name"])
+    new_state["player2"]=p2; new_state["status"]="playing"
+    games[old_id]=new_state
+    rematch_requests.pop(old_id,None)
+    await broadcast(old_id,{"type":"rematch_start","game":new_state})
 
-    # Сбрасываем состояние той же игры
-    new_state = make_game(gtype, old_game_id, p1["id"], p1["name"])
-    new_state["player2"] = p2
-    new_state["status"] = "playing"
-
-    # Перезаписываем игру
-    games[old_game_id] = new_state
-    rematch_requests.pop(old_game_id, None)
-
-    # Сообщаем обоим — игра началась заново
-    await broadcast(old_game_id, {"type": "rematch_start", "game": new_state})
-
-async def finish_dice(game_id, game):
+async def finish_dice(game_id,game):
     if game["round"]==1:
         game["round"]=2; game["guesser_role"]="p2"
         game["secret"]=None; game["attempts_left"]=3
@@ -324,7 +294,7 @@ async def finish_dice(game_id, game):
                 except: pass
         await broadcast(game_id,{"type":"game_state","game":game})
 
-# ── ШАШКИ ЛОГИКА ─────────────────────────────────────────────
+# ── ШАШКИ ────────────────────────────────────────────────────
 def check_ttt(b):
     for a,bb,c in[(0,1,2),(3,4,5),(6,7,8),(0,3,6),(1,4,7),(2,5,8),(0,4,8),(2,4,6)]:
         if b[a]!=" " and b[a]==b[bb]==b[c]: return b[a]
@@ -427,7 +397,7 @@ def chk_win(game):
             try: record_game(int(game["player2"]["id"]))
             except: pass
 
-# ── HTTP ─────────────────────────────────────────────────────
+# ── HTTP API ──────────────────────────────────────────────────
 @app.get("/")
 def root(): return {"status":"GameZone running"}
 
